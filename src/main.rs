@@ -4,6 +4,7 @@ mod theme;
 
 use chrono::Local;
 use paint::{Fonts, Painter};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::process::Command;
@@ -17,6 +18,7 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::WindowBuilder,
 };
+use x11rb::{connection::Connection, protocol::xproto::ConnectionExt};
 use zeroize::Zeroize;
 
 const APP_NAME: &str = "NIRUX";
@@ -459,6 +461,28 @@ struct Layout {
     button_h: f32,
 }
 
+fn focus_login_window(window: &winit::window::Window) {
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let raw = handle.as_raw();
+    let xid = match raw {
+        RawWindowHandle::Xlib(handle) => handle.window as u32,
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        _ => return,
+    };
+    let Ok((connection, screen)) = x11rb::connect(None) else {
+        return;
+    };
+    let _ = screen;
+    let _ = connection.set_input_focus(
+        x11rb::protocol::xproto::InputFocus::PARENT,
+        xid,
+        x11rb::CURRENT_TIME,
+    );
+    let _ = connection.flush();
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let preview = args.iter().any(|arg| arg == "--preview");
@@ -540,6 +564,7 @@ fn main() {
     let mut ui = Ui::new();
     let mut next_tick = Instant::now() + Duration::from_millis(500);
     let mut exit_after_draw = false;
+    let mut focus_done = false;
 
     let _ = event_loop.run(move |event, elwt| {
         let _ = &context;
@@ -631,6 +656,11 @@ fn main() {
                     }
                 }
                 WindowEvent::RedrawRequested => {
+                    if !focus_done {
+                        focus_login_window(&window);
+                        window.focus_window();
+                        focus_done = true;
+                    }
                     let size = window.inner_size();
                     let width = size.width.max(1);
                     let height = size.height.max(1);

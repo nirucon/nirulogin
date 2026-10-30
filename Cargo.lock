@@ -698,14 +698,16 @@ dependencies = [
 
 [[package]]
 name = "nirulogin"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ab_glyph",
  "chrono",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "softbuffer",
  "winit",
+ "x11rb",
  "zeroize",
 ]
 
