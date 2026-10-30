@@ -62,7 +62,13 @@ fn read_message(stream: &mut UnixStream) -> Result<Response, String> {
     serde_json::from_slice(&payload).map_err(|e| e.to_string())
 }
 
-pub fn login(username: &str, password: &str, session: &str, layout: &str) -> Result<(), String> {
+pub fn login(
+    username: &str,
+    password: &str,
+    session: &str,
+    layout: &str,
+    configured_session: &str,
+) -> Result<(), String> {
     let socket = std::env::var("GREETD_SOCK")
         .map_err(|_| "NIRULOGIN must be started by greetd".to_string())?;
     let mut stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
@@ -111,7 +117,7 @@ pub fn login(username: &str, password: &str, session: &str, layout: &str) -> Res
                             "XDG_CURRENT_DESKTOP=NIRU".into(),
                             "DESKTOP_SESSION=niruwm".into(),
                             format!("NIRULOGIN_LAYOUT={layout}"),
-                            format!("NIRULOGIN_SESSION={session}"),
+                            format!("NIRULOGIN_SESSION={configured_session}"),
                         ],
                     },
                 )?;

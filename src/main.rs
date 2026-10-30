@@ -539,7 +539,7 @@ fn main() {
         ));
     }
     window.set_visible(true);
-    window.focus_window();
+    focus_login_window(&window);
     window.set_cursor_visible(true);
 
     let window = Rc::new(window);
@@ -564,7 +564,7 @@ fn main() {
     let mut ui = Ui::new();
     let mut next_tick = Instant::now() + Duration::from_millis(500);
     let mut exit_after_draw = false;
-    let mut focus_done = false;
+    let focus_until = Instant::now() + Duration::from_secs(3);
 
     let _ = event_loop.run(move |event, elwt| {
         let _ = &context;
@@ -587,6 +587,7 @@ fn main() {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
+                        focus_login_window(&window);
                         let size = window.inner_size();
                         if let Some(action) = ui.hit_power(size.width, size.height, ui.mouse) {
                             ui.pending_power = Some(action);
@@ -656,11 +657,6 @@ fn main() {
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    if !focus_done {
-                        focus_login_window(&window);
-                        window.focus_window();
-                        focus_done = true;
-                    }
                     let size = window.inner_size();
                     let width = size.width.max(1);
                     let height = size.height.max(1);
@@ -681,6 +677,9 @@ fn main() {
             },
             Event::AboutToWait => {
                 let now = Instant::now();
+                if now < focus_until {
+                    focus_login_window(&window);
+                }
                 if now >= next_tick {
                     let clock_changed = ui.update_clock();
                     ui.caret_on = !ui.caret_on;
@@ -751,14 +750,20 @@ fn submit(
     window.request_redraw();
     let username = ui.username.trim().to_string();
     let password = ui.password.clone();
-    let session = std::env::var("NIRULOGIN_SESSION")
+    let configured_session = std::env::var("NIRULOGIN_SESSION")
         .unwrap_or_else(|_| format!("/home/{username}/.local/bin/niruwm-session"));
-    let session = if Path::new("/usr/local/bin/nirulogin-session").is_file() {
+    let start_session = if Path::new("/usr/local/bin/nirulogin-session").is_file() {
         "/usr/local/bin/nirulogin-session".to_string()
     } else {
-        session
+        configured_session.clone()
     };
-    match greetd::login(&username, &password, &session, &ui.layout) {
+    match greetd::login(
+        &username,
+        &password,
+        &start_session,
+        &ui.layout,
+        &configured_session,
+    ) {
         Ok(()) => {
             *exit_after_draw = true;
             window.request_redraw();
