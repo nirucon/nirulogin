@@ -12,6 +12,7 @@ session; NIRULOGIN owns the window, clock, prompt and error messages.
 - `greetd`
 - `xinit` / `startx`
 - an Xorg server that can be started by the greeter user
+- `setxkbmap` for the Swedish default layout
 
 Install these with the distribution package manager. NIRUX installs and owns
 the integration files.
@@ -52,7 +53,7 @@ command = "/usr/bin/startx /usr/local/bin/nirulogin -- :0 vt7"
 user = "_greetd"
 ```
 
-Debian's greeter user is `_greetd`; other distributions may use `greeter`.
+Debian's greeter user is `_greetd`; Arch uses `greeter`; Void uses `_greeter`.
 NIRUX detects the user and writes the owned configuration.
 
 The X server must be allowed to start for the greeter user. On Debian this is
@@ -62,16 +63,20 @@ The X server must be allowed to start for the greeter user. On Debian this is
 
 - Username is prefilled from `NIRULOGIN_USER` or `niru`.
 - Password field has focus at startup.
+- Swedish keyboard layout (`se`) is applied at startup and passed to the session.
 - `Tab` moves between username and password.
 - `Enter` signs in.
 - `Escape` clears the password.
+- **Power off** and **Restart** are available at the bottom right and require
+  confirmation.
 - The session is always NIRUWM.
 
 ## Scope
 
 The first release deliberately has no session picker, wallpaper decoding,
 animations, network access or autologin UI. The background is the NIRUX theme
-background colour, currently `#0f0f10`.
+background colour, currently `#0f0f10`. Power actions use logind and a narrow
+polkit rule for the greetd greeter user.
 
 ## Test without switching the display manager
 
