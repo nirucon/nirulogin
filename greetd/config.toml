@@ -1,0 +1,10 @@
+# NIRULOGIN owner: /usr/local
+[terminal]
+vt = 7
+
+[general]
+source_profile = false
+
+[default_session]
+command = "/usr/bin/startx /usr/local/bin/nirulogin -- :0 vt7"
+user = "_greetd"
