@@ -28,6 +28,8 @@ if [ -z "$GREETER_USER" ]; then
         GREETER_USER=_greetd
     elif getent passwd greeter >/dev/null 2>&1; then
         GREETER_USER=greeter
+    elif getent passwd _greeter >/dev/null 2>&1; then
+        GREETER_USER=_greeter
     else
         echo 'nirulogin install: no greetd user found' >&2
         exit 1
