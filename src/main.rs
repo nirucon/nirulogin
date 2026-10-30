@@ -370,7 +370,7 @@ impl Ui {
                 &fonts.bold,
                 22.0 * l.scale,
                 center,
-                (py as f32 + 42.0 * l.scale) as f32,
+                py as f32 + 42.0 * l.scale,
                 label,
                 FOREGROUND,
             );
@@ -378,7 +378,7 @@ impl Ui {
                 &fonts.regular,
                 12.0 * l.scale,
                 center,
-                (py as f32 + 70.0 * l.scale) as f32,
+                py as f32 + 70.0 * l.scale,
                 "Enter to confirm · Esc to cancel",
                 MUTED,
             );

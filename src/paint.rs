@@ -118,6 +118,7 @@ impl Painter {
         self.text_spaced(font, size, x, baseline, text, color, 0.0);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn text_spaced(
         &mut self,
         font: &FontArc,
@@ -164,6 +165,7 @@ impl Painter {
         self.text(font, size, center_x - width / 2.0, baseline, text, color);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn centered_spaced_text(
         &mut self,
         font: &FontArc,
