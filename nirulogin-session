@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+layout=${NIRULOGIN_LAYOUT:-se}
+setxkbmap -layout "$layout" 2>/dev/null || :
+session=${NIRULOGIN_SESSION:-}
+if [ -z "$session" ]; then
+    session=$HOME/.local/bin/niruwm-session
+fi
+exec "$session"

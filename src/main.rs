@@ -5,10 +5,11 @@ mod theme;
 use chrono::Local;
 use paint::{Fonts, Painter};
 use std::num::NonZeroU32;
+use std::path::Path;
+use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use theme::*;
-use zeroize::Zeroize;
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, WindowEvent},
@@ -16,6 +17,7 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::WindowBuilder,
 };
+use zeroize::Zeroize;
 
 const APP_NAME: &str = "NIRUX";
 const TAGLINE: &str = "A minimal X11 desktop";
@@ -24,6 +26,12 @@ const TAGLINE: &str = "A minimal X11 desktop";
 enum Field {
     Username,
     Password,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PowerAction {
+    PowerOff,
+    Reboot,
 }
 
 struct Ui {
@@ -36,6 +44,8 @@ struct Ui {
     date: String,
     caret_on: bool,
     mouse: (f64, f64),
+    layout: String,
+    pending_power: Option<PowerAction>,
 }
 
 impl Ui {
@@ -52,6 +62,8 @@ impl Ui {
             date: now.format("%A %-d %B").to_string(),
             caret_on: true,
             mouse: (0.0, 0.0),
+            layout: std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into()),
+            pending_power: None,
         }
     }
 
@@ -214,7 +226,11 @@ impl Ui {
             user_y,
             cw,
             field_h,
-            if self.focus == Field::Username { ACCENT } else { BORDER },
+            if self.focus == Field::Username {
+                ACCENT
+            } else {
+                BORDER
+            },
         );
         let pad = (14.0 * l.scale) as i32;
         let baseline = user_y + field_h as i32 / 2 + (15.0 * l.scale) as i32 / 3;
@@ -253,7 +269,11 @@ impl Ui {
             pass_y,
             cw,
             field_h,
-            if self.focus == Field::Password { ACCENT } else { BORDER },
+            if self.focus == Field::Password {
+                ACCENT
+            } else {
+                BORDER
+            },
         );
         let bullets = "•".repeat(self.password.chars().count().min(64));
         painter.text(
@@ -265,8 +285,8 @@ impl Ui {
             FOREGROUND,
         );
         if self.focus == Field::Password && self.caret_on {
-            let caret_x = (x + pad) as f32
-                + painter.text_width(&fonts.regular, 15.0 * l.scale, &bullets);
+            let caret_x =
+                (x + pad) as f32 + painter.text_width(&fonts.regular, 15.0 * l.scale, &bullets);
             painter.fill(
                 caret_x as i32,
                 pass_y + (10.0 * l.scale) as i32,
@@ -306,6 +326,95 @@ impl Ui {
                 MUTED,
             );
         }
+
+        let bottom = h as f32 - 34.0 * l.scale;
+        painter.text(
+            &fonts.regular,
+            12.0 * l.scale,
+            28.0 * l.scale,
+            bottom,
+            &format!("Keyboard: {}", self.layout.to_uppercase()),
+            MUTED,
+        );
+        let off = self.power_rect(w, h, PowerAction::PowerOff);
+        let reboot = self.power_rect(w, h, PowerAction::Reboot);
+        painter.text(
+            &fonts.regular,
+            12.0 * l.scale,
+            reboot.0 as f32,
+            bottom,
+            "Restart",
+            MUTED,
+        );
+        painter.text(
+            &fonts.regular,
+            12.0 * l.scale,
+            off.0 as f32,
+            bottom,
+            "Power off",
+            MUTED,
+        );
+
+        if let Some(action) = self.pending_power {
+            let panel_w = 360.0 * l.scale;
+            let panel_h = 112.0 * l.scale;
+            let px = (center - panel_w / 2.0) as i32;
+            let py = (h as f32 / 2.0 - panel_h / 2.0) as i32;
+            painter.fill(px, py, panel_w as u32, panel_h as u32, SURFACE);
+            painter.border(px, py, panel_w as u32, panel_h as u32, BORDER);
+            let label = match action {
+                PowerAction::PowerOff => "Power off?",
+                PowerAction::Reboot => "Restart?",
+            };
+            painter.centered_text(
+                &fonts.bold,
+                22.0 * l.scale,
+                center,
+                (py as f32 + 42.0 * l.scale) as f32,
+                label,
+                FOREGROUND,
+            );
+            painter.centered_text(
+                &fonts.regular,
+                12.0 * l.scale,
+                center,
+                (py as f32 + 70.0 * l.scale) as f32,
+                "Enter to confirm · Esc to cancel",
+                MUTED,
+            );
+        }
+    }
+
+    fn power_rect(&self, width: u32, height: u32, action: PowerAction) -> (i32, i32, i32, i32) {
+        let scale = (height as f32 / 1200.0).clamp(0.72, 1.15);
+        let font = 12.0 * scale;
+        let _ = font;
+        let off_w = (76.0 * scale) as i32;
+        let restart_w = (58.0 * scale) as i32;
+        let gap = (24.0 * scale) as i32;
+        let right = width as i32 - (28.0 * scale) as i32;
+        let reboot_x = right - restart_w;
+        let off_x = reboot_x - gap - off_w;
+        let y = height as i32 - (48.0 * scale) as i32;
+        let h = (24.0 * scale) as i32;
+        match action {
+            PowerAction::PowerOff => (off_x, y, off_w, h),
+            PowerAction::Reboot => (reboot_x, y, restart_w, h),
+        }
+    }
+
+    fn hit_power(&self, width: u32, height: u32, pos: (f64, f64)) -> Option<PowerAction> {
+        for action in [PowerAction::PowerOff, PowerAction::Reboot] {
+            let (x, y, w, h) = self.power_rect(width, height, action);
+            if pos.0 >= f64::from(x)
+                && pos.0 <= f64::from(x + w)
+                && pos.1 >= f64::from(y)
+                && pos.1 <= f64::from(y + h)
+            {
+                return Some(action);
+            }
+        }
+        None
     }
 
     fn hit_field(&self, width: u32, height: u32, pos: (f64, f64)) -> Option<Field> {
@@ -363,6 +472,10 @@ fn main() {
         return;
     }
 
+    let layout = std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into());
+    let _ = Command::new("setxkbmap")
+        .args(["-layout", &layout])
+        .status();
     let fonts = match Fonts::load() {
         Ok(fonts) => fonts,
         Err(error) => {
@@ -390,10 +503,16 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Some(monitor) = window.current_monitor().or_else(|| event_loop.primary_monitor()) {
+    if let Some(monitor) = window
+        .current_monitor()
+        .or_else(|| event_loop.primary_monitor())
+    {
         let size = monitor.size();
         let _ = window.request_inner_size(size);
-        window.set_outer_position(PhysicalPosition::new(monitor.position().x, monitor.position().y));
+        window.set_outer_position(PhysicalPosition::new(
+            monitor.position().x,
+            monitor.position().y,
+        ));
     }
     window.set_visible(true);
     window.focus_window();
@@ -444,11 +563,22 @@ fn main() {
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         let size = window.inner_size();
-                        if let Some(field) = ui.hit_field(size.width, size.height, ui.mouse) {
+                        if let Some(action) = ui.hit_power(size.width, size.height, ui.mouse) {
+                            ui.pending_power = Some(action);
+                            window.request_redraw();
+                        } else if let Some(field) = ui.hit_field(size.width, size.height, ui.mouse)
+                        {
                             ui.set_focus(field);
                             window.request_redraw();
                         } else if ui.hit_button(size.width, size.height, ui.mouse) {
-                            submit(&mut ui, preview, &window, &mut painter, &fonts, &mut exit_after_draw);
+                            submit(
+                                &mut ui,
+                                preview,
+                                &window,
+                                &mut painter,
+                                &fonts,
+                                &mut exit_after_draw,
+                            );
                         }
                     }
                 }
@@ -462,18 +592,33 @@ fn main() {
                             window.request_redraw();
                         }
                         Key::Named(NamedKey::Enter) => {
-                            submit(&mut ui, preview, &window, &mut painter, &fonts, &mut exit_after_draw);
+                            if let Some(action) = ui.pending_power.take() {
+                                run_power(action, &mut ui, &window);
+                            } else {
+                                submit(
+                                    &mut ui,
+                                    preview,
+                                    &window,
+                                    &mut painter,
+                                    &fonts,
+                                    &mut exit_after_draw,
+                                );
+                            }
                         }
                         Key::Named(NamedKey::Backspace) => {
                             ui.backspace();
                             window.request_redraw();
                         }
                         Key::Named(NamedKey::Escape) => {
-                            ui.password.zeroize();
-                            ui.password.clear();
-                            ui.error.clear();
-                            ui.set_focus(Field::Password);
-                            window.request_redraw();
+                            if ui.pending_power.take().is_some() {
+                                window.request_redraw();
+                            } else {
+                                ui.password.zeroize();
+                                ui.password.clear();
+                                ui.error.clear();
+                                ui.set_focus(Field::Password);
+                                window.request_redraw();
+                            }
                         }
                         _ => {
                             if let Some(text) = event.text.as_ref() {
@@ -520,6 +665,28 @@ fn main() {
     });
 }
 
+fn run_power(action: PowerAction, ui: &mut Ui, window: &winit::window::Window) {
+    let command = match action {
+        PowerAction::PowerOff => "poweroff",
+        PowerAction::Reboot => "reboot",
+    };
+    let result = Command::new("loginctl").arg(command).status();
+    match result {
+        Ok(status) if status.success() => {}
+        _ => {
+            ui.error = format!(
+                "Could not {}",
+                if action == PowerAction::PowerOff {
+                    "power off"
+                } else {
+                    "restart"
+                }
+            );
+            window.request_redraw();
+        }
+    }
+}
+
 fn submit(
     ui: &mut Ui,
     preview: bool,
@@ -556,7 +723,12 @@ fn submit(
     let password = ui.password.clone();
     let session = std::env::var("NIRULOGIN_SESSION")
         .unwrap_or_else(|_| format!("/home/{username}/.local/bin/niruwm-session"));
-    match greetd::login(&username, &password, &session) {
+    let session = if Path::new("/usr/local/bin/nirulogin-session").is_file() {
+        "/usr/local/bin/nirulogin-session".to_string()
+    } else {
+        session
+    };
+    match greetd::login(&username, &password, &session, &ui.layout) {
         Ok(()) => {
             *exit_after_draw = true;
             window.request_redraw();

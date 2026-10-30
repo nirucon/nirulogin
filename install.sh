@@ -35,6 +35,8 @@ if [ -z "$GREETER_USER" ]; then
 fi
 
 install -D -m 0755 target/release/nirulogin "$DEST"
+install -D -m 0755 nirulogin-session "$PREFIX/bin/nirulogin-session"
+install -D -m 0644 nirulogin-power.rules /etc/polkit-1/rules.d/49-nirulogin-power.rules
 install -d -m 0755 "$CONF_DIR"
 if [ -f "$CONF" ] && ! grep -q '^# NIRULOGIN owner:' "$CONF"; then
     cp -a "$CONF" "$CONF.before-nirulogin"
