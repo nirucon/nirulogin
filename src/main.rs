@@ -708,24 +708,55 @@ fn main() {
 }
 
 fn run_power(action: PowerAction, ui: &mut Ui, window: &winit::window::Window) {
-    let command = match action {
-        PowerAction::PowerOff => "poweroff",
-        PowerAction::Reboot => "reboot",
+    let (method, verb) = match action {
+        PowerAction::PowerOff => ("PowerOff", "poweroff"),
+        PowerAction::Reboot => ("Reboot", "reboot"),
     };
-    let result = Command::new("loginctl").arg(command).status();
-    match result {
-        Ok(status) if status.success() => {}
-        _ => {
-            ui.error = format!(
-                "Could not {}",
-                if action == PowerAction::PowerOff {
-                    "power off"
-                } else {
-                    "restart"
-                }
-            );
-            window.request_redraw();
-        }
+    let mut ok = false;
+    if Command::new("dbus-send")
+        .args([
+            "--system",
+            "--print-reply",
+            "--reply-timeout=120000",
+            "--dest=org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            &format!("org.freedesktop.login1.Manager.{method}"),
+            "boolean:true",
+        ])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        ok = true;
+    }
+    if !ok
+        && Command::new("systemctl")
+            .arg(verb)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    {
+        ok = true;
+    }
+    if !ok
+        && Command::new("loginctl")
+            .arg(verb)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    {
+        ok = true;
+    }
+    if !ok {
+        ui.error = format!(
+            "Could not {}",
+            if action == PowerAction::PowerOff {
+                "power off"
+            } else {
+                "restart"
+            }
+        );
+        window.request_redraw();
     }
 }
 
