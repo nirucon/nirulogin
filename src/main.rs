@@ -461,6 +461,14 @@ struct Layout {
 }
 
 fn focus_login_window() {
+    if Command::new("xdotool")
+        .args(["search", "--name", "NIRUX Login", "windowfocus"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
     let Ok((connection, screen)) = x11rb::connect(None) else {
         return;
     };
