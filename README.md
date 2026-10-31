@@ -73,10 +73,17 @@ The X server must be allowed to start for the greeter user. On Debian this is
 
 ## Scope
 
-The first release deliberately has no session picker, wallpaper decoding,
+The current release deliberately has no session picker, wallpaper decoding,
 animations, network access or autologin UI. The background is the NIRUX theme
-background colour, currently `#0f0f10`. Power actions use logind and a narrow
-polkit rule for the greetd greeter user.
+background colour, currently `#0f0f10`. Power actions use the login1 D-Bus
+capability with systemctl/loginctl fallbacks and a narrow polkit rule for the
+greetd greeter user.
+
+The password field handles the normal secret PAM prompt. Additional interactive
+PAM conversations (visible prompts, extra authentication steps or expired
+password changes) are rejected with a clear error and the session is cancelled;
+the password is never sent to an unknown visible prompt. This limitation is
+tracked in the suite planning roadmap.
 
 ## Test without switching the display manager
 
