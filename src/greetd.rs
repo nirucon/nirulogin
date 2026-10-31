@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -72,6 +73,10 @@ pub fn login(
     let socket = std::env::var("GREETD_SOCK")
         .map_err(|_| "NIRULOGIN must be started by greetd".to_string())?;
     let mut stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(30))))
+        .map_err(|e| e.to_string())?;
     write_message(
         &mut stream,
         &Request::CreateSession {
@@ -88,13 +93,17 @@ pub fn login(
                 auth_message,
             } => {
                 let response = match auth_message_type {
-                    AuthMessageType::Secret | AuthMessageType::Visible => {
+                    AuthMessageType::Secret => {
                         if answered_password {
-                            None
-                        } else {
-                            answered_password = true;
-                            Some(password.to_string())
+                            let _ = write_message(&mut stream, &Request::CancelSession);
+                            return Err("Additional authentication is required".into());
                         }
+                        answered_password = true;
+                        Some(password.to_string())
+                    }
+                    AuthMessageType::Visible => {
+                        let _ = write_message(&mut stream, &Request::CancelSession);
+                        return Err("Additional authentication is required".into());
                     }
                     AuthMessageType::Info | AuthMessageType::Error => {
                         let _ = auth_message;
