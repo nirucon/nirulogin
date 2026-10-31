@@ -42,6 +42,13 @@ enum AuthMessageType {
     Error,
 }
 
+pub enum Prompt {
+    Secret(String),
+    Visible(String),
+    Info(String),
+    Error(String),
+}
+
 fn write_message(stream: &mut UnixStream, request: &Request) -> Result<(), String> {
     let payload = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     let len = u32::try_from(payload.len()).map_err(|_| "greetd message too long".to_string())?;
@@ -63,13 +70,17 @@ fn read_message(stream: &mut UnixStream) -> Result<Response, String> {
     serde_json::from_slice(&payload).map_err(|e| e.to_string())
 }
 
-pub fn login(
+pub fn login<F>(
     username: &str,
     password: &str,
     session: &str,
     layout: &str,
     configured_session: &str,
-) -> Result<(), String> {
+    mut prompt: F,
+) -> Result<(), String>
+where
+    F: FnMut(Prompt) -> Result<Option<String>, String>,
+{
     let socket = std::env::var("GREETD_SOCK")
         .map_err(|_| "NIRULOGIN must be started by greetd".to_string())?;
     let mut stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
@@ -93,20 +104,33 @@ pub fn login(
                 auth_message,
             } => {
                 let response = match auth_message_type {
-                    AuthMessageType::Secret => {
-                        if answered_password {
-                            let _ = write_message(&mut stream, &Request::CancelSession);
-                            return Err("Additional authentication is required".into());
-                        }
-                        answered_password = true;
-                        Some(password.to_string())
+                    AuthMessageType::Secret | AuthMessageType::Visible => {
+                        let secret = matches!(auth_message_type, AuthMessageType::Secret);
+                        let answer = if !answered_password && secret {
+                            answered_password = true;
+                            password.to_string()
+                        } else {
+                            let requested = if secret {
+                                Prompt::Secret(auth_message)
+                            } else {
+                                Prompt::Visible(auth_message)
+                            };
+                            match prompt(requested)? {
+                                Some(value) => value,
+                                None => {
+                                    let _ = write_message(&mut stream, &Request::CancelSession);
+                                    return Err("Authentication cancelled".into());
+                                }
+                            }
+                        };
+                        Some(answer)
                     }
-                    AuthMessageType::Visible => {
-                        let _ = write_message(&mut stream, &Request::CancelSession);
-                        return Err("Additional authentication is required".into());
+                    AuthMessageType::Info => {
+                        prompt(Prompt::Info(auth_message))?;
+                        None
                     }
-                    AuthMessageType::Info | AuthMessageType::Error => {
-                        let _ = auth_message;
+                    AuthMessageType::Error => {
+                        prompt(Prompt::Error(auth_message))?;
                         None
                     }
                 };

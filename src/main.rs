@@ -8,6 +8,8 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 use theme::*;
 use winit::{
@@ -37,11 +39,24 @@ enum PowerAction {
     Reboot,
 }
 
+struct PamPrompt {
+    message: String,
+    secret: bool,
+}
+
+enum AuthEvent {
+    Prompt(PamPrompt),
+    Info(String),
+    Done(Result<(), String>),
+}
+
 struct Ui {
     username: String,
     password: String,
     focus: Field,
     error: String,
+    notice: String,
+    pam_prompt: Option<PamPrompt>,
     signing: bool,
     clock: String,
     date: String,
@@ -60,6 +75,8 @@ impl Ui {
             password: String::new(),
             focus: Field::Password,
             error: String::new(),
+            notice: String::new(),
+            pam_prompt: None,
             signing: false,
             clock: now.format("%H:%M").to_string(),
             date: now.format("%A %-d %B").to_string(),
@@ -103,7 +120,9 @@ impl Ui {
     }
 
     fn type_text(&mut self, text: &str) {
-        if self.signing || matches!(self.focus, Field::PowerOff | Field::Reboot) {
+        if (self.signing && self.pam_prompt.is_none())
+            || matches!(self.focus, Field::PowerOff | Field::Reboot)
+        {
             return;
         }
         let target = self.active_text();
@@ -117,7 +136,9 @@ impl Ui {
     }
 
     fn backspace(&mut self) {
-        if self.signing || matches!(self.focus, Field::PowerOff | Field::Reboot) {
+        if (self.signing && self.pam_prompt.is_none())
+            || matches!(self.focus, Field::PowerOff | Field::Reboot)
+        {
             return;
         }
         self.active_text().pop();
@@ -259,12 +280,17 @@ impl Ui {
             );
         }
 
+        let pass_label = if self.pam_prompt.is_some() {
+            "Password / response"
+        } else {
+            "Password"
+        };
         painter.text(
             &fonts.regular,
             12.0 * l.scale,
             l.left,
             l.pass_label,
-            "Password",
+            pass_label,
             MUTED,
         );
         let pass_y = l.pass_y as i32;
@@ -280,18 +306,23 @@ impl Ui {
                 BORDER
             },
         );
-        let bullets = "•".repeat(self.password.chars().count().min(64));
+        let visible = self.pam_prompt.as_ref().map(|p| !p.secret).unwrap_or(false);
+        let shown = if visible {
+            self.password.clone()
+        } else {
+            "•".repeat(self.password.chars().count().min(64))
+        };
         painter.text(
             &fonts.regular,
             15.0 * l.scale,
             (x + pad) as f32,
             (pass_y + field_h as i32 / 2 + (15.0 * l.scale) as i32 / 3) as f32,
-            &bullets,
+            &shown,
             FOREGROUND,
         );
         if self.focus == Field::Password && self.caret_on {
             let caret_x =
-                (x + pad) as f32 + painter.text_width(&fonts.regular, 15.0 * l.scale, &bullets);
+                (x + pad) as f32 + painter.text_width(&fonts.regular, 15.0 * l.scale, &shown);
             painter.fill(
                 caret_x as i32,
                 pass_y + (10.0 * l.scale) as i32,
@@ -320,6 +351,15 @@ impl Ui {
                 (button_y + button_h as i32 + 28) as f32,
                 &self.error,
                 ERROR,
+            );
+        } else if !self.notice.is_empty() {
+            painter.centered_text(
+                &fonts.regular,
+                12.0 * l.scale,
+                center,
+                (button_y + button_h as i32 + 28) as f32,
+                &self.notice,
+                FOREGROUND,
             );
         } else if self.signing {
             painter.centered_text(
@@ -612,6 +652,8 @@ fn main() {
     let mut ui = Ui::new();
     let mut next_tick = Instant::now() + Duration::from_millis(500);
     let mut exit_after_draw = false;
+    let (auth_tx, auth_rx) = mpsc::channel::<AuthEvent>();
+    let mut reply_tx: Option<Sender<String>> = None;
 
     let _ = event_loop.run(move |event, elwt| {
         let _ = &context;
@@ -655,12 +697,16 @@ fn main() {
                                 &mut painter,
                                 &fonts,
                                 &mut exit_after_draw,
+                                &auth_tx,
+                                &mut reply_tx,
                             );
                         }
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
-                    if event.state != ElementState::Pressed || ui.signing {
+                    if event.state != ElementState::Pressed
+                        || (ui.signing && ui.pam_prompt.is_none())
+                    {
                         return;
                     }
                     match event.logical_key {
@@ -685,6 +731,8 @@ fn main() {
                                     &mut painter,
                                     &fonts,
                                     &mut exit_after_draw,
+                                    &auth_tx,
+                                    &mut reply_tx,
                                 );
                             }
                         }
@@ -733,6 +781,39 @@ fn main() {
                 _ => {}
             },
             Event::AboutToWait => {
+                while let Ok(auth_event) = auth_rx.try_recv() {
+                    match auth_event {
+                        AuthEvent::Prompt(prompt) => {
+                            ui.pam_prompt = Some(prompt);
+                            ui.password.zeroize();
+                            ui.password.clear();
+                            ui.error.clear();
+                            ui.notice.clear();
+                            ui.signing = true;
+                            ui.set_focus(Field::Password);
+                            window.request_redraw();
+                        }
+                        AuthEvent::Info(message) => {
+                            ui.notice = message;
+                            window.request_redraw();
+                        }
+                        AuthEvent::Done(result) => {
+                            match result {
+                                Ok(()) => exit_after_draw = true,
+                                Err(error) => {
+                                    ui.password.zeroize();
+                                    ui.password.clear();
+                                    ui.pam_prompt = None;
+                                    ui.signing = false;
+                                    ui.error = error;
+                                    ui.notice.clear();
+                                    ui.set_focus(Field::Password);
+                                }
+                            }
+                            window.request_redraw();
+                        }
+                    }
+                }
                 let now = Instant::now();
                 if !ui.signing && ui.pending_power.is_none() {
                     focus_login_window();
@@ -804,14 +885,41 @@ fn run_power(action: PowerAction, ui: &mut Ui, window: &winit::window::Window) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn submit(
     ui: &mut Ui,
     preview: bool,
     window: &winit::window::Window,
     painter: &mut Painter,
     fonts: &Fonts,
-    exit_after_draw: &mut bool,
+    _exit_after_draw: &mut bool,
+    auth_tx: &Sender<AuthEvent>,
+    reply_tx: &mut Option<Sender<String>>,
 ) {
+    if let Some(prompt) = ui.pam_prompt.as_ref() {
+        let answer = ui.password.clone();
+        let message = prompt.message.clone();
+        match reply_tx.take() {
+            Some(tx) if tx.send(answer).is_ok() => {
+                ui.password.zeroize();
+                ui.password.clear();
+                ui.pam_prompt = None;
+                ui.notice = message;
+                ui.error.clear();
+                ui.signing = true;
+                ui.set_focus(Field::Password);
+            }
+            _ => {
+                ui.pam_prompt = None;
+                ui.password.zeroize();
+                ui.password.clear();
+                ui.signing = false;
+                ui.error = "Authentication session ended".into();
+            }
+        }
+        window.request_redraw();
+        return;
+    }
     if ui.signing {
         return;
     }
@@ -834,6 +942,7 @@ fn submit(
     }
     ui.signing = true;
     ui.error.clear();
+    ui.notice.clear();
     ui.draw(painter, fonts);
     window.request_redraw();
     let username = ui.username.trim().to_string();
@@ -845,24 +954,37 @@ fn submit(
     } else {
         configured_session.clone()
     };
-    match greetd::login(
-        &username,
-        &password,
-        &start_session,
-        &ui.layout,
-        &configured_session,
-    ) {
-        Ok(()) => {
-            *exit_after_draw = true;
-            window.request_redraw();
-        }
-        Err(error) => {
-            ui.password.zeroize();
-            ui.password.clear();
-            ui.signing = false;
-            ui.error = error;
-            ui.set_focus(Field::Password);
-            window.request_redraw();
-        }
-    }
+    let (reply_sender, reply_receiver) = mpsc::channel::<String>();
+    *reply_tx = Some(reply_sender);
+    let events = auth_tx.clone();
+    thread::spawn(move || {
+        let result = greetd::login(
+            &username,
+            &password,
+            &start_session,
+            &std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into()),
+            &configured_session,
+            |prompt| match prompt {
+                greetd::Prompt::Info(message) | greetd::Prompt::Error(message) => {
+                    let _ = events.send(AuthEvent::Info(message));
+                    Ok(None)
+                }
+                greetd::Prompt::Secret(message) => {
+                    let _ = events.send(AuthEvent::Prompt(PamPrompt {
+                        message,
+                        secret: true,
+                    }));
+                    reply_receiver.recv().map(Some).map_err(|e| e.to_string())
+                }
+                greetd::Prompt::Visible(message) => {
+                    let _ = events.send(AuthEvent::Prompt(PamPrompt {
+                        message,
+                        secret: false,
+                    }));
+                    reply_receiver.recv().map(Some).map_err(|e| e.to_string())
+                }
+            },
+        );
+        let _ = events.send(AuthEvent::Done(result));
+    });
 }
