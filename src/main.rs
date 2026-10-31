@@ -564,7 +564,6 @@ fn main() {
     let mut ui = Ui::new();
     let mut next_tick = Instant::now() + Duration::from_millis(500);
     let mut exit_after_draw = false;
-    let focus_until = Instant::now() + Duration::from_secs(3);
 
     let _ = event_loop.run(move |event, elwt| {
         let _ = &context;
@@ -677,7 +676,7 @@ fn main() {
             },
             Event::AboutToWait => {
                 let now = Instant::now();
-                if now < focus_until {
+                if !ui.signing && ui.pending_power.is_none() {
                     focus_login_window(&window);
                 }
                 if now >= next_tick {
