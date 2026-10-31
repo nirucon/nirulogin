@@ -84,8 +84,8 @@ greetd greeter user.
 The password field handles the normal secret PAM prompt. Additional interactive
 PAM conversations (visible prompts, extra authentication steps or expired
 password changes) are rejected with a clear error and the session is cancelled;
-the password is never sent to an unknown visible prompt. This limitation is
-tracked in the suite planning roadmap.
+the password is never sent to an unknown visible prompt. This is an explicit
+current limitation, not a claimed full PAM implementation.
 
 ## Test without switching the display manager
 
