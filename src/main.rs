@@ -27,6 +27,8 @@ const TAGLINE: &str = "A minimal X11 desktop";
 enum Field {
     Username,
     Password,
+    PowerOff,
+    Reboot,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,7 +88,9 @@ impl Ui {
     fn next_focus(&mut self) {
         self.focus = match self.focus {
             Field::Username => Field::Password,
-            Field::Password => Field::Username,
+            Field::Password => Field::PowerOff,
+            Field::PowerOff => Field::Reboot,
+            Field::Reboot => Field::Username,
         };
         self.caret_on = true;
     }
@@ -94,12 +98,12 @@ impl Ui {
     fn active_text(&mut self) -> &mut String {
         match self.focus {
             Field::Username => &mut self.username,
-            Field::Password => &mut self.password,
+            _ => &mut self.password,
         }
     }
 
     fn type_text(&mut self, text: &str) {
-        if self.signing {
+        if self.signing || matches!(self.focus, Field::PowerOff | Field::Reboot) {
             return;
         }
         let target = self.active_text();
@@ -113,7 +117,7 @@ impl Ui {
     }
 
     fn backspace(&mut self) {
-        if self.signing {
+        if self.signing || matches!(self.focus, Field::PowerOff | Field::Reboot) {
             return;
         }
         self.active_text().pop();
@@ -339,13 +343,31 @@ impl Ui {
         );
         let off = self.power_rect(w, h, PowerAction::PowerOff);
         let reboot = self.power_rect(w, h, PowerAction::Reboot);
+        for (rect, focused) in [
+            (off, self.focus == Field::PowerOff),
+            (reboot, self.focus == Field::Reboot),
+        ] {
+            if focused {
+                painter.border(
+                    rect.0,
+                    rect.1,
+                    rect.2.max(1) as u32,
+                    rect.3.max(1) as u32,
+                    ACCENT,
+                );
+            }
+        }
         painter.text(
             &fonts.regular,
             12.0 * l.scale,
             reboot.0 as f32,
             bottom,
             "Restart",
-            MUTED,
+            if self.focus == Field::Reboot {
+                FOREGROUND
+            } else {
+                MUTED
+            },
         );
         painter.text(
             &fonts.regular,
@@ -353,7 +375,11 @@ impl Ui {
             off.0 as f32,
             bottom,
             "Power off",
-            MUTED,
+            if self.focus == Field::PowerOff {
+                FOREGROUND
+            } else {
+                MUTED
+            },
         );
 
         if let Some(action) = self.pending_power {
@@ -611,6 +637,10 @@ fn main() {
                         focus_login_window();
                         let size = window.inner_size();
                         if let Some(action) = ui.hit_power(size.width, size.height, ui.mouse) {
+                            ui.focus = match action {
+                                PowerAction::PowerOff => Field::PowerOff,
+                                PowerAction::Reboot => Field::Reboot,
+                            };
                             ui.pending_power = Some(action);
                             window.request_redraw();
                         } else if let Some(field) = ui.hit_field(size.width, size.height, ui.mouse)
@@ -641,6 +671,12 @@ fn main() {
                         Key::Named(NamedKey::Enter) => {
                             if let Some(action) = ui.pending_power.take() {
                                 run_power(action, &mut ui, &window);
+                            } else if ui.focus == Field::PowerOff {
+                                ui.pending_power = Some(PowerAction::PowerOff);
+                                window.request_redraw();
+                            } else if ui.focus == Field::Reboot {
+                                ui.pending_power = Some(PowerAction::Reboot);
+                                window.request_redraw();
                             } else {
                                 submit(
                                     &mut ui,
