@@ -309,7 +309,7 @@ impl Ui {
             15.0 * l.scale,
             center,
             (button_y + button_h as i32 / 2 + 5) as f32,
-            "Sign in",
+            "Press Enter to sign in",
             FOREGROUND,
         );
         if !self.error.is_empty() {
