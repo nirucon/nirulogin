@@ -4,7 +4,6 @@ mod theme;
 
 use chrono::Local;
 use paint::{Fonts, Painter};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::process::Command;
@@ -461,26 +460,41 @@ struct Layout {
     button_h: f32,
 }
 
-fn focus_login_window(window: &winit::window::Window) {
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
-    let raw = handle.as_raw();
-    let xid = match raw {
-        RawWindowHandle::Xlib(handle) => handle.window as u32,
-        RawWindowHandle::Xcb(handle) => handle.window.get(),
-        _ => return,
-    };
+fn focus_login_window() {
     let Ok((connection, screen)) = x11rb::connect(None) else {
         return;
     };
-    let _ = screen;
-    let _ = connection.set_input_focus(
-        x11rb::protocol::xproto::InputFocus::PARENT,
-        xid,
-        x11rb::CURRENT_TIME,
-    );
-    let _ = connection.flush();
+    let root = connection.setup().roots[screen].root;
+    let Ok(tree_cookie) = connection.query_tree(root) else {
+        return;
+    };
+    let Ok(tree) = tree_cookie.reply() else {
+        return;
+    };
+    for window in tree.children {
+        let Ok(property) = connection.get_property(
+            false,
+            window,
+            x11rb::protocol::xproto::AtomEnum::WM_NAME,
+            x11rb::protocol::xproto::AtomEnum::STRING,
+            0,
+            64,
+        ) else {
+            continue;
+        };
+        let Ok(name) = property.reply() else {
+            continue;
+        };
+        if name.value == b"NIRUX Login" {
+            let _ = connection.set_input_focus(
+                x11rb::protocol::xproto::InputFocus::PARENT,
+                window,
+                x11rb::CURRENT_TIME,
+            );
+            let _ = connection.flush();
+            return;
+        }
+    }
 }
 
 fn main() {
@@ -539,7 +553,7 @@ fn main() {
         ));
     }
     window.set_visible(true);
-    focus_login_window(&window);
+    focus_login_window();
     window.set_cursor_visible(true);
 
     let window = Rc::new(window);
@@ -586,7 +600,7 @@ fn main() {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
-                        focus_login_window(&window);
+                        focus_login_window();
                         let size = window.inner_size();
                         if let Some(action) = ui.hit_power(size.width, size.height, ui.mouse) {
                             ui.pending_power = Some(action);
@@ -677,7 +691,7 @@ fn main() {
             Event::AboutToWait => {
                 let now = Instant::now();
                 if !ui.signing && ui.pending_power.is_none() {
-                    focus_login_window(&window);
+                    focus_login_window();
                 }
                 if now >= next_tick {
                     let clock_changed = ui.update_clock();
