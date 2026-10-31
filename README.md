@@ -1,5 +1,7 @@
 # NIRULOGIN
 
+**Part of [NIRUX - A minimal X11 desktop by Nicklas Rudolfsson](https://github.com/nirucon/nirux).**
+
 Minimal graphical login for the NIRUX X11 desktop.
 
 NIRULOGIN is a small X11 greeter for [greetd](https://github.com/kennylevinsen/greetd).
