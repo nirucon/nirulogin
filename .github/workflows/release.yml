@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Verify release identity
+        run: |
+          test "$(./target/release/nirulogin --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+      - name: Collect assets
+        run: |
+          mkdir -p dist
+          cp target/release/nirulogin dist/
+          cp install.sh nirulogin-session nirulogin-power.rules nirulogin-layouts dist/
+          cd dist && sha256sum nirulogin install.sh nirulogin-session nirulogin-power.rules nirulogin-layouts > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          make_latest: true
+          files: |
+            dist/nirulogin
+            dist/install.sh
+            dist/nirulogin-session
+            dist/nirulogin-power.rules
+            dist/nirulogin-layouts
+            dist/SHA256SUMS
+          generate_release_notes: true

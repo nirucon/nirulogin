@@ -1,0 +1,6 @@
+# NIRULOGIN keyboard layouts. The first entry is the default.
+# Add or remove XKB layout codes here; the login screen cycles through this
+# list when the indicator is clicked. Examples: se (Swedish), us (English US),
+# gb (English UK), de (German), fr (French).
+se
+us

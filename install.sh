@@ -36,9 +36,24 @@ if [ -z "$GREETER_USER" ]; then
     fi
 fi
 
-install -D -m 0755 target/release/nirulogin "$DEST"
+BIN_SRC="${NIRULOGIN_BIN:-}"
+if [ -z "$BIN_SRC" ]; then
+    if [ -x ./nirulogin ]; then
+        BIN_SRC=./nirulogin
+    elif [ -x target/release/nirulogin ]; then
+        BIN_SRC=target/release/nirulogin
+    else
+        echo 'nirulogin install: no binary found (build it or run from a release directory)' >&2
+        exit 1
+    fi
+fi
+install -D -m 0755 "$BIN_SRC" "$DEST"
 install -D -m 0755 nirulogin-session "$PREFIX/bin/nirulogin-session"
 install -D -m 0644 nirulogin-power.rules /etc/polkit-1/rules.d/49-nirulogin-power.rules
+install -d -m 0755 /etc/nirulogin
+if [ ! -f /etc/nirulogin/layouts ]; then
+    install -m 0644 nirulogin-layouts /etc/nirulogin/layouts
+fi
 install -d -m 0755 "$CONF_DIR"
 if [ -f "$CONF" ] && ! grep -q '^# NIRULOGIN owner:' "$CONF"; then
     cp -a "$CONF" "$CONF.before-nirulogin"

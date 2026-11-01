@@ -14,7 +14,7 @@ session; NIRULOGIN owns the window, clock, prompt and error messages.
 - `greetd`
 - `xinit` / `startx`
 - an Xorg server that can be started by the greeter user
-- `setxkbmap` for the Swedish default layout
+- `setxkbmap` and `xkeyboard-config` for keyboard layouts
 
 Install these with the distribution package manager. NIRUX installs and owns
 the integration files.
@@ -29,6 +29,9 @@ The release profile is LTO, stripped and self-contained apart from the system
 X11/font libraries.
 
 ## Install
+
+From a release directory, `./install.sh` uses the prebuilt `nirulogin` beside
+it; from a source checkout it uses `target/release/nirulogin`.
 
 ```sh
 sudo ./install.sh
@@ -65,7 +68,10 @@ The X server must be allowed to start for the greeter user. On Debian this is
 
 - Username is prefilled from `NIRULOGIN_USER` or `niru`.
 - Password field has focus at startup.
-- Swedish keyboard layout (`se`) is applied at startup and passed to the session.
+- Swedish (`se`) is the default layout and is passed to the session.
+- The bottom-left keyboard indicator switches between the layouts in
+  `/etc/nirulogin/layouts` (first entry is the default). Click it to cycle; the
+  selected layout is applied to the greeter and exported to the session.
 - `Tab` moves between username and password.
 - `Enter` signs in.
 - `Escape` clears the password.
@@ -76,7 +82,9 @@ The X server must be allowed to start for the greeter user. On Debian this is
 ## Scope
 
 The current release deliberately has no session picker, wallpaper decoding,
-animations, network access or autologin UI. The background is the NIRUX theme
+animations, network access or autologin UI. Keyboard layouts are a short
+curated list rather than every XKB layout: edit `/etc/nirulogin/layouts` or set
+`NIRULOGIN_LAYOUTS=se,us` for a display-manager-specific list. The background is the NIRUX theme
 background colour, currently `#0f0f10`. Power actions use the login1 D-Bus
 capability with systemctl/loginctl fallbacks and a narrow polkit rule for the
 greetd greeter user.
@@ -95,3 +103,11 @@ GREETD_SOCK=/tmp/fake.sock ./target/release/nirulogin
 
 NIRULOGIN also accepts `--preview` for window-only testing. In preview mode the
 password is accepted by the UI but authentication is disabled.
+
+## Keyboard layouts
+
+`/etc/nirulogin/layouts` contains one XKB layout code per line; the first is the
+default. NIRUX installs `se` followed by `us`, and never overwrites an existing
+file. `NIRULOGIN_LAYOUTS` overrides the file for a single greeter configuration.
+Only layout codes are accepted here; variants belong in the session's
+`~/.config/niruwm/input.toml`.

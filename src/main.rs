@@ -39,6 +39,66 @@ enum PowerAction {
     Reboot,
 }
 
+const DEFAULT_LAYOUT: &str = "se";
+
+fn normalize_layout(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 32
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn add_layouts(out: &mut Vec<String>, text: &str) {
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        for token in line.split(|c: char| c.is_whitespace() || c == ',') {
+            if let Some(layout) = normalize_layout(token) {
+                if !out.iter().any(|existing| existing == &layout) {
+                    out.push(layout);
+                }
+            }
+        }
+    }
+}
+
+/// Layouts offered at the login screen. NIRUX writes `/etc/nirulogin/layouts`
+/// with Swedish first; administrators can edit it without touching the binary.
+/// `NIRULOGIN_LAYOUTS` is an explicit per-greeter override for tests and custom
+/// display-manager configurations. Only XKB layout codes are accepted here;
+/// variants stay in the session's input settings.
+fn login_layouts() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(value) = std::env::var("NIRULOGIN_LAYOUTS") {
+        add_layouts(&mut out, &value);
+    }
+    if let Ok(value) = std::fs::read_to_string("/etc/nirulogin/layouts") {
+        add_layouts(&mut out, &value);
+    }
+    if let Ok(value) = std::env::var("NIRULOGIN_LAYOUT") {
+        if let Some(layout) = normalize_layout(&value) {
+            out.retain(|item| item != &layout);
+            out.insert(0, layout);
+        }
+    }
+    if out.is_empty() {
+        out.push(DEFAULT_LAYOUT.to_string());
+    }
+    out
+}
+
+fn apply_layout(layout: &str) -> bool {
+    Command::new("setxkbmap")
+        .args(["-layout", layout])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
 struct PamPrompt {
     message: String,
     secret: bool,
@@ -62,12 +122,13 @@ struct Ui {
     date: String,
     caret_on: bool,
     mouse: (f64, f64),
+    layouts: Vec<String>,
     layout: String,
     pending_power: Option<PowerAction>,
 }
 
 impl Ui {
-    fn new() -> Self {
+    fn new(layouts: Vec<String>, layout: String) -> Self {
         let now = Local::now();
         let username = std::env::var("NIRULOGIN_USER").unwrap_or_else(|_| "niru".into());
         Self {
@@ -82,7 +143,8 @@ impl Ui {
             date: now.format("%A %-d %B").to_string(),
             caret_on: true,
             mouse: (0.0, 0.0),
-            layout: std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into()),
+            layouts,
+            layout,
             pending_power: None,
         }
     }
@@ -373,12 +435,22 @@ impl Ui {
         }
 
         let bottom = h as f32 - 34.0 * l.scale;
+        let (language_x, language_y, language_w, language_h) = self.language_rect(w, h);
+        if self.layouts.len() > 1 {
+            painter.border(
+                language_x,
+                language_y,
+                language_w as u32,
+                language_h as u32,
+                BORDER,
+            );
+        }
         painter.text(
             &fonts.regular,
             12.0 * l.scale,
             28.0 * l.scale,
             bottom,
-            &format!("Keyboard: {}", self.layout.to_uppercase()),
+            &self.language_label(),
             MUTED,
         );
         let off = self.power_rect(w, h, PowerAction::PowerOff);
@@ -450,6 +522,53 @@ impl Ui {
                 MUTED,
             );
         }
+    }
+
+    fn language_rect(&self, width: u32, height: u32) -> (i32, i32, i32, i32) {
+        let scale = (height as f32 / 1200.0).clamp(0.72, 1.15);
+        let x = (16.0 * scale) as i32;
+        let y = height as i32 - (54.0 * scale) as i32;
+        let w = ((300.0 * scale) as i32).min(width as i32 - x);
+        (x, y, w, (30.0 * scale) as i32)
+    }
+
+    fn language_label(&self) -> String {
+        let code = self.layout.to_uppercase();
+        if self.layouts.len() > 1 {
+            format!("Keyboard: {code} · click to change")
+        } else {
+            format!("Keyboard: {code}")
+        }
+    }
+
+    fn cycle_layout(&mut self) {
+        if self.layouts.len() < 2 {
+            return;
+        }
+        let current = self
+            .layouts
+            .iter()
+            .position(|layout| layout == &self.layout)
+            .unwrap_or(0);
+        let next = self.layouts[(current + 1) % self.layouts.len()].clone();
+        if apply_layout(&next) {
+            self.layout = next;
+            self.notice = format!("Keyboard layout: {}", self.layout.to_uppercase());
+            self.error.clear();
+        } else {
+            self.notice = format!(
+                "Could not switch to keyboard layout {}",
+                next.to_uppercase()
+            );
+        }
+    }
+
+    fn hit_language(&self, width: u32, height: u32, pos: (f64, f64)) -> bool {
+        let (x, y, w, h) = self.language_rect(width, height);
+        pos.0 >= f64::from(x)
+            && pos.0 <= f64::from(x + w)
+            && pos.1 >= f64::from(y)
+            && pos.1 <= f64::from(y + h)
     }
 
     fn power_rect(&self, width: u32, height: u32, action: PowerAction) -> (i32, i32, i32, i32) {
@@ -584,10 +703,14 @@ fn main() {
         return;
     }
 
-    let layout = std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into());
-    let _ = Command::new("setxkbmap")
-        .args(["-layout", &layout])
-        .status();
+    let layouts = login_layouts();
+    let layout = layouts
+        .first()
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_LAYOUT.into());
+    if !apply_layout(&layout) {
+        eprintln!("nirulogin: cannot apply keyboard layout {layout}");
+    }
     let fonts = match Fonts::load() {
         Ok(fonts) => fonts,
         Err(error) => {
@@ -649,7 +772,7 @@ fn main() {
     let width = size.width.max(1);
     let height = size.height.max(1);
     let mut painter = Painter::new(width, height);
-    let mut ui = Ui::new();
+    let mut ui = Ui::new(layouts, layout);
     let mut next_tick = Instant::now() + Duration::from_millis(500);
     let mut exit_after_draw = false;
     let (auth_tx, auth_rx) = mpsc::channel::<AuthEvent>();
@@ -684,6 +807,9 @@ fn main() {
                                 PowerAction::Reboot => Field::Reboot,
                             };
                             ui.pending_power = Some(action);
+                            window.request_redraw();
+                        } else if ui.hit_language(size.width, size.height, ui.mouse) {
+                            ui.cycle_layout();
                             window.request_redraw();
                         } else if let Some(field) = ui.hit_field(size.width, size.height, ui.mouse)
                         {
@@ -947,6 +1073,7 @@ fn submit(
     window.request_redraw();
     let username = ui.username.trim().to_string();
     let password = ui.password.clone();
+    let layout = ui.layout.clone();
     let configured_session = std::env::var("NIRULOGIN_SESSION")
         .unwrap_or_else(|_| format!("/home/{username}/.local/bin/niruwm-session"));
     let start_session = if Path::new("/usr/local/bin/nirulogin-session").is_file() {
@@ -962,7 +1089,7 @@ fn submit(
             &username,
             &password,
             &start_session,
-            &std::env::var("NIRULOGIN_LAYOUT").unwrap_or_else(|_| "se".into()),
+            &layout,
             &configured_session,
             |prompt| match prompt {
                 greetd::Prompt::Info(message) | greetd::Prompt::Error(message) => {
@@ -987,4 +1114,19 @@ fn submit(
         );
         let _ = events.send(AuthEvent::Done(result));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_codes_are_normalised_and_comments_ignored() {
+        assert_eq!(normalize_layout(" SE "), Some("se".into()));
+        assert_eq!(normalize_layout("us-intl"), Some("us-intl".into()));
+        assert_eq!(normalize_layout("se; rm -rf /"), None);
+        let mut layouts = Vec::new();
+        add_layouts(&mut layouts, "se # svenska\nus, gb\nse\n");
+        assert_eq!(layouts, vec!["se", "us", "gb"]);
+    }
 }
