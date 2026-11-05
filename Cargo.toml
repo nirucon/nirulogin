@@ -1,6 +1,6 @@
 [package]
 name = "nirulogin"
-version = "0.1.12"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -8,9 +8,11 @@ description = "Minimal NIRUX X11 login greeter for greetd"
 
 [dependencies]
 ab_glyph = "0.2"
+libc = "0.2"
+png = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 raw-window-handle = "0.6"
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["randr"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 softbuffer = "0.4"

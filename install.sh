@@ -51,6 +51,8 @@ install -D -m 0755 "$BIN_SRC" "$DEST"
 install -D -m 0755 nirulogin-session "$PREFIX/bin/nirulogin-session"
 install -D -m 0644 nirulogin-power.rules /etc/polkit-1/rules.d/49-nirulogin-power.rules
 install -d -m 0755 /etc/nirulogin
+# Remembers the last user who signed in successfully; only the greeter writes it.
+install -d -o "$GREETER_USER" -g "$(id -gn "$GREETER_USER")" -m 0700 /var/lib/nirulogin
 if [ ! -f /etc/nirulogin/layouts ]; then
     install -m 0644 nirulogin-layouts /etc/nirulogin/layouts
 fi
