@@ -1,7 +1,10 @@
 // NIRULOGIN: let the local, active greeter session power off or restart a
-// machine nobody else is using. The *-multiple-sessions actions (other users
-// logged in, for example over SSH) are deliberately not granted here, so they
-// keep the system's default policy (administrator authentication).
+// machine nobody else is using. When other users are logged in (for example
+// over SSH) login1 asks for the *-multiple-sessions actions instead. logind's
+// own policy allows those for any active local session, so they are
+// explicitly sent to administrator authentication here; the greeter has no
+// authentication agent, so login1 refuses and the user powers off from a
+// session instead.
 polkit.addRule(function(action, subject) {
     if (!subject.local || !subject.active) {
         return;
@@ -17,5 +20,12 @@ polkit.addRule(function(action, subject) {
     ];
     if (allowed.indexOf(action.id) >= 0) {
         return polkit.Result.YES;
+    }
+    var others = [
+        "org.freedesktop.login1.power-off-multiple-sessions",
+        "org.freedesktop.login1.reboot-multiple-sessions"
+    ];
+    if (others.indexOf(action.id) >= 0) {
+        return polkit.Result.AUTH_ADMIN;
     }
 });

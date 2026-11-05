@@ -124,9 +124,12 @@ fallbacks). `nirulogin-power.rules` lets the local, active greeter user
 (`_greetd`, `greeter` or `_greeter`) use `org.freedesktop.login1.power-off`
 and `org.freedesktop.login1.reboot` without a password.
 
-Since 0.2.0 the `*-multiple-sessions` actions are **not** granted: when other
-users are logged in (for example over SSH), login1 refuses the request and the
-greeter shows "Other users are logged in. Power off from a session instead."
+Since 0.2.0 the `*-multiple-sessions` actions are **not** granted. logind's
+own policy allows them for any active local session, so the rule explicitly
+requires administrator authentication for them; the greeter has no
+authentication agent, so when other users are logged in (for example over SSH)
+login1 refuses the request and the greeter shows "Other users are logged in.
+Power off from a session instead."
 Power off or restart from a logged-in session in that case.
 
 ## Theme
