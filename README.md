@@ -37,8 +37,9 @@ it; from a source checkout it uses `target/release/nirulogin`.
 sudo ./install.sh
 ```
 
-The installer copies the binary to `/usr/local/bin/nirulogin` and writes a
-greetd configuration. It does not replace the active display manager unless
+The installer copies the binary to `/usr/local/bin/nirulogin`, installs the
+polkit rule, creates `/var/lib/nirulogin` (owned by the greeter user, mode
+0700) and writes a greetd configuration. It does not replace the active display manager unless
 `--enable` is given.
 
 ```sh
@@ -66,34 +67,96 @@ The X server must be allowed to start for the greeter user. On Debian this is
 
 ## Interaction
 
-- Username is prefilled from `NIRULOGIN_USER` or `niru`.
-- Password field has focus at startup.
+- **Username prefill:** `NIRULOGIN_USER` if set; otherwise the last user who
+  signed in successfully (`/var/lib/nirulogin/last-user`, written by the greeter
+  only after greetd reports `Success`); otherwise the only human account
+  (uid ≥ 1000 with a valid login shell) when there is exactly one; otherwise the
+  field is empty and has focus.
+- The session path is resolved from the user database (`getpwnam`), so homes
+  outside `/home` work.
+- Password field has focus when a username is prefilled. Its placeholder shows
+  the active layout, e.g. `Password · SE`.
+- **Caps Lock is on** is shown under the password field while Caps Lock is
+  active.
 - Swedish (`se`) is the default layout and is passed to the session.
 - The bottom-left keyboard indicator switches between the layouts in
-  `/etc/nirulogin/layouts` (first entry is the default). Click it to cycle; the
-  selected layout is applied to the greeter and exported to the session.
-- `Tab` moves between username and password.
-- `Enter` signs in.
-- `Escape` clears the password.
-- **Power off** and **Restart** are available at the bottom right and require
-  confirmation.
+  `/etc/nirulogin/layouts` (first entry is the default). Click it, focus it
+  with `Tab` and press `Enter`/`Space`, or press `F2` or `Ctrl+Space` anywhere;
+  the shortcut is never typed into a field. The selected layout is applied to
+  the greeter and exported to the session.
+- `Tab` / `Shift+Tab` move between username, password, keyboard layout,
+  Power off and Restart.
+- `Enter` signs in. While signing in the button is disabled and shows
+  "Signing in…".
+- After a failed sign-in the password is cleared, the username kept, the
+  password focused, and the message shows the number of failed attempts in
+  this greeter run plus PAM's own text when there is one (for example the
+  faillock "account is locked" message).
+- `Escape` clears the password, or cancels an extra PAM prompt (see below).
+- **Power off** and **Restart** (icon and label, bottom right) open a
+  confirmation dialog whose default button is **Cancel**; `Tab`/arrows switch
+  buttons, `Enter` selects, `Escape` cancels. The action runs off the UI thread
+  with a 10 s deadline and shows "Powering off…"/"Restarting…".
+- Every monitor is covered with the background; the form is drawn on the
+  RandR primary monitor, or on the monitor under the pointer when there is no
+  primary, and is re-laid out when monitors change.
 - The session is always NIRUWM.
+
+## PAM conversation
+
+greetd runs PAM; NIRULOGIN relays the conversation:
+
+- The first secret prompt receives the password typed on the login screen.
+- Any further prompt — secret (OTP, second factor, new password) or visible
+  (shown as typed) — is shown in the password field as "Password / response"
+  with PAM's prompt text above the button. `Enter` answers it.
+- PAM info and error messages are shown under the button; an error message
+  stays visible after a failed attempt.
+- `Escape` during an extra prompt cancels the sign-in: NIRULOGIN sends
+  `CancelSession` to greetd and shows "Sign-in cancelled".
+- Every owned copy of a password or response is held in a zeroizing buffer and
+  the serialized greetd message is wiped after it is written.
+
+## Power actions and polkit
+
+Power off and Restart use the login1 D-Bus API (with `systemctl`/`loginctl`
+fallbacks). `nirulogin-power.rules` lets the local, active greeter user
+(`_greetd`, `greeter` or `_greeter`) use `org.freedesktop.login1.power-off`
+and `org.freedesktop.login1.reboot` without a password.
+
+Since 0.2.0 the `*-multiple-sessions` actions are **not** granted: when other
+users are logged in (for example over SSH), login1 refuses the request and the
+greeter shows "Other users are logged in. Power off from a session instead."
+Power off or restart from a logged-in session in that case.
+
+## Theme
+
+If `/etc/nirulogin/theme.toml` exists, its colors replace the built-in NIRUX
+palette, and an optional PNG wallpaper is scaled to cover each monitor and
+darkened. The file must be readable by the greeter user; anything missing or
+malformed falls back to the defaults, so without the file nothing changes.
+
+```toml
+background = "#0f0f10"
+surface    = "#161618"
+foreground = "#e5e5e5"
+muted      = "#a8a8a8"
+border     = "#2a2a2d"
+accent     = "#5a5a60"
+error      = "#d77a7a"
+wallpaper  = "/usr/share/nirulogin/wallpaper.png"   # optional, PNG only
+dim        = 0.45                                   # optional, 0 black .. 1 unchanged
+```
+
+NIRUX writes this file from the active theme during `nirux update`.
+`NIRULOGIN_THEME=/path/to/theme.toml` selects another file (previews, tests).
 
 ## Scope
 
-The current release deliberately has no session picker, wallpaper decoding,
-animations, network access or autologin UI. Keyboard layouts are a short
-curated list rather than every XKB layout: edit `/etc/nirulogin/layouts` or set
-`NIRULOGIN_LAYOUTS=se,us` for a display-manager-specific list. The background is the NIRUX theme
-background colour, currently `#0f0f10`. Power actions use the login1 D-Bus
-capability with systemctl/loginctl fallbacks and a narrow polkit rule for the
-greetd greeter user.
-
-The password field handles the normal secret PAM prompt. Additional interactive
-PAM conversations (visible prompts, extra authentication steps or expired
-password changes) are rejected with a clear error and the session is cancelled;
-the password is never sent to an unknown visible prompt. This is an explicit
-current limitation, not a claimed full PAM implementation.
+The greeter deliberately has no session picker, user avatars, animations,
+network access or autologin UI. Keyboard layouts are a short curated list
+rather than every XKB layout: edit `/etc/nirulogin/layouts` or set
+`NIRULOGIN_LAYOUTS=se,us` for a display-manager-specific list.
 
 ## Test without switching the display manager
 
@@ -103,6 +166,12 @@ GREETD_SOCK=/tmp/fake.sock ./target/release/nirulogin
 
 NIRULOGIN also accepts `--preview` for window-only testing. In preview mode the
 password is accepted by the UI but authentication is disabled.
+
+`cargo test` includes a fake greetd server on a temporary socket that covers
+success, an auth error, extra secret/visible prompts, info/error messages,
+Esc cancel (`CancelSession`), an oversized message and the `StartSession`
+command and environment. CI also runs an Xvfb `--preview` screenshot smoke and
+an MSRV (Rust 1.85) build.
 
 ## Keyboard layouts
 
