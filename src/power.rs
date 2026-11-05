@@ -1,6 +1,7 @@
 //! Power off / restart through login1, off the UI thread.
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -43,7 +44,10 @@ enum Outcome {
 }
 
 fn run_until(mut command: Command, deadline: Instant) -> Outcome {
+    // Own process group: a helper that touches the greeter's VT (for example
+    // a polkit tty agent) must never get the greeter stopped by SIGTTIN/SIGTTOU.
     let child = command
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -97,26 +101,24 @@ pub fn run(action: PowerAction) -> PowerResult {
         // rule-less action is refused immediately instead of hanging.
         "boolean:true",
     ]);
-    let mut denied = false;
+    // The fallbacks must never start a password agent at the greeter.
     let mut systemctl = Command::new("systemctl");
-    systemctl.arg(verb);
+    systemctl.args(["--no-ask-password", verb]);
     let mut loginctl = Command::new("loginctl");
-    loginctl.arg(verb);
+    loginctl.args(["--no-ask-password", verb]);
     for command in [dbus, systemctl, loginctl] {
         match run_until(command, deadline) {
             Outcome::Ok => return PowerResult::Started,
             Outcome::TimedOut => return PowerResult::TimedOut,
-            Outcome::Err(stderr) => denied |= is_denial(&stderr),
+            // polkit said no; the fallbacks ask the same polkit.
+            Outcome::Err(stderr) if is_denial(&stderr) => return PowerResult::Denied,
+            Outcome::Err(_) => {}
         }
         if Instant::now() >= deadline {
             return PowerResult::TimedOut;
         }
     }
-    if denied {
-        PowerResult::Denied
-    } else {
-        PowerResult::Failed
-    }
+    PowerResult::Failed
 }
 
 pub fn message(action: PowerAction, result: &PowerResult) -> Option<String> {
@@ -188,7 +190,13 @@ mod tests {
         assert!(!allowed.contains("multiple-sessions"), "{allowed}");
         assert!(allowed.contains("\"org.freedesktop.login1.power-off\""));
         assert!(allowed.contains("\"org.freedesktop.login1.reboot\""));
-        assert!(!rule.contains("-multiple-sessions\""), "{rule}");
+        // logind allows *-multiple-sessions for any active local session,
+        // so the rule must send them to administrator authentication.
+        let others = &rule[rule.find("var others").expect("multiple-sessions list")..];
+        assert!(others.contains("power-off-multiple-sessions"));
+        assert!(others.contains("reboot-multiple-sessions"));
+        assert!(others.contains("polkit.Result.AUTH_ADMIN"));
+        assert!(!others.contains("Result.YES"));
         assert!(rule.contains("subject.local") && rule.contains("subject.active"));
     }
 }
