@@ -136,7 +136,7 @@ Power off or restart from a logged-in session in that case.
 
 If `/etc/nirulogin/theme.toml` exists, its colors replace the built-in NIRUX
 palette, and an optional PNG wallpaper is scaled to cover each monitor and
-darkened. The file must be readable by the greeter user; anything missing or
+darkened. Colors are `"#rrggbb"` or `"rrggbb"`. The file must be readable by the greeter user; anything missing or
 malformed falls back to the defaults, so without the file nothing changes.
 
 ```toml

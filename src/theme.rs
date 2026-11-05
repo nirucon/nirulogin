@@ -49,7 +49,9 @@ impl Color {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        let hex = value.trim().strip_prefix('#')?;
+        // "#rrggbb" or bare "rrggbb" (the form NIRUX appearance.toml uses).
+        let value = value.trim();
+        let hex = value.strip_prefix('#').unwrap_or(value);
         if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
@@ -258,6 +260,10 @@ mod tests {
         assert_eq!(theme.background, Color::new(0x2e, 0x34, 0x40));
         assert_eq!(theme.accent, Color::new(0x88, 0xc0, 0xd0));
         assert_eq!(theme.error, Theme::default().error, "invalid value ignored");
+        assert_eq!(
+            Theme::parse("surface = \"3b4252\"").surface,
+            Color::new(0x3b, 0x42, 0x52)
+        );
         assert_eq!(
             theme.wallpaper.as_deref(),
             Some(Path::new("/usr/share/nirulogin/wallpaper.png"))
