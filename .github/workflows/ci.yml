@@ -15,3 +15,32 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --release --locked
       - run: ./target/release/nirulogin --version
+      - name: Xvfb --preview screenshot smoke
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11-xkb-utils x11-apps imagemagick fonts-dejavu-core >/dev/null
+          Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & XVFB=$!
+          sleep 2
+          export DISPLAY=:99
+          NIRULOGIN_USER=preview NIRULOGIN_LAYOUTS=se,us ./target/release/nirulogin --preview & APP=$!
+          sleep 3
+          kill -0 "$APP"
+          xwd -root -silent | convert xwd:- preview.png
+          # A blank or crashed greeter is a single colour; the form is not.
+          colors=$(convert preview.png -format '%k' info:)
+          echo "distinct colours: $colors"
+          test "$colors" -gt 16
+          kill "$APP" "$XVFB"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-screenshot
+          path: preview.png
+          retention-days: 7
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - run: cargo build --locked
+      - run: cargo test --locked
