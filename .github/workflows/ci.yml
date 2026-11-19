@@ -32,10 +32,11 @@ jobs:
           test "$colors" -gt 16
           kill "$APP" "$XVFB"
       - uses: actions/upload-artifact@v4
+        if: failure()
         with:
           name: preview-screenshot
           path: preview.png
-          retention-days: 7
+          retention-days: 1
 
   msrv:
     runs-on: ubuntu-latest
