@@ -11,7 +11,14 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Built on Debian 12 (glibc 2.36): a binary linked on the runner's own,
+    # newer glibc does not start on Debian 12/13 or Void (NIRULOGIN 0.3.0).
+    container: debian:bookworm-slim
     steps:
+      - name: Build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates curl git build-essential binutils >/dev/null
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -23,6 +30,11 @@ jobs:
       - name: Verify release identity
         run: |
           test "$(./target/release/nirulogin --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+      - name: Runs on glibc 2.36 (Debian 12) and newer
+        run: |
+          need=$(objdump -T target/release/nirulogin | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1)
+          echo "highest glibc symbol: $need"
+          test "$(printf '%s\n2.36\n' "$need" | sort -V | tail -n 1)" = 2.36
       - name: Collect assets
         run: |
           mkdir -p dist
