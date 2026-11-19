@@ -1,3 +1,4 @@
+mod ascii;
 mod display;
 mod greetd;
 mod paint;
@@ -5,6 +6,7 @@ mod power;
 mod theme;
 mod users;
 
+use ascii::{Ascii, Canvas, Spot};
 use chrono::Local;
 use display::{Rect, Screen, X11};
 use paint::{Fonts, Painter};
@@ -17,7 +19,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
-use theme::{Color, Image, Theme};
+use theme::{Color, Image, Style, Theme};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, MouseButton, WindowEvent},
@@ -154,6 +156,8 @@ struct Ui {
     pending_power: Option<PowerAction>,
     choice: Choice,
     powering: Option<PowerAction>,
+    /// The `ascii` style's monospace proportions; `None` is the classic look.
+    ascii: Option<ascii::Metrics>,
 }
 
 impl Ui {
@@ -189,6 +193,7 @@ impl Ui {
             pending_power: None,
             choice: Choice::Cancel,
             powering: None,
+            ascii: None,
         }
     }
 
@@ -276,10 +281,8 @@ impl Ui {
         let column_w = (420.0 * scale).min(width as f32 - 64.0).max(280.0);
         let field_h = 44.0 * scale;
         let gap = 14.0 * scale;
-        let top_block = 48.0 * scale + 24.0 * scale + 28.0 * scale;
-        let content_h = top_block
-            + 46.0 * scale
-            + 24.0 * scale
+        // Everything below the title block: labels, fields and the button.
+        let form_h = 42.0 * scale
             + 18.0 * scale
             + field_h
             + gap
@@ -288,18 +291,51 @@ impl Ui {
             + 28.0 * scale
             + 46.0 * scale
             + 24.0 * scale;
+        // The `ascii` style: the banner and its line on top, then the clock
+        // and date, then the form.
+        let banner = self.ascii.map(|m| {
+            let size = ascii::banner_size(width, height, 0.5, 0.22, m.advance, m.line);
+            let tag_size = 15.0 * scale;
+            let gap = (18.0 * scale).round() as i32;
+            let block = Spot::centred(&m, 0, 0, size, tag_size, gap).height(&m) as f32;
+            (
+                BannerSpot {
+                    size,
+                    tag_size,
+                    gap,
+                },
+                block,
+            )
+        });
+        let header_h = match banner {
+            // From the top to the username label, less the 18 px the label
+            // overlaps the form below (the same arithmetic as classic).
+            Some((_, block)) => block + 136.0 * scale,
+            None => 48.0 * scale + 24.0 * scale + 28.0 * scale + 46.0 * scale + 24.0 * scale,
+        };
+        let content_h = header_h + form_h - 42.0 * scale + 18.0 * scale;
         let top = ((height as f32 - content_h) / 2.0).max(36.0);
         let left = (width as f32 - column_w) / 2.0;
-        let clock_baseline = top + 42.0 * scale;
+        let (clock_baseline, title_baseline) = match banner {
+            Some((_, block)) => (top + block + 86.0 * scale, 0.0),
+            None => (
+                top + 42.0 * scale,
+                top + 42.0 * scale + 26.0 * scale + 54.0 * scale,
+            ),
+        };
         let date_baseline = clock_baseline + 26.0 * scale;
-        let title_baseline = date_baseline + 54.0 * scale;
         let tagline_baseline = title_baseline + 24.0 * scale;
-        let user_label = tagline_baseline + 42.0 * scale;
+        let user_label = match banner {
+            Some(_) => date_baseline + 42.0 * scale,
+            None => tagline_baseline + 42.0 * scale,
+        };
         let user_y = user_label + 10.0 * scale;
         let pass_label = user_y + field_h + 22.0 * scale;
         let pass_y = pass_label + 10.0 * scale;
         let button_y = pass_y + field_h + 30.0 * scale;
         Layout {
+            banner: banner.map(|(spot, _)| spot),
+            banner_top: top,
             scale,
             left,
             column_w,
@@ -349,23 +385,25 @@ impl Ui {
             &self.date,
             t.muted,
         );
-        painter.centered_spaced_text(
-            &fonts.bold,
-            38.0 * l.scale,
-            center,
-            l.title_baseline,
-            APP_NAME,
-            t.foreground,
-            4.0 * l.scale,
-        );
-        painter.centered_text(
-            &fonts.regular,
-            14.0 * l.scale,
-            center,
-            l.tagline_baseline,
-            TAGLINE,
-            t.muted,
-        );
+        if l.banner.is_none() {
+            painter.centered_spaced_text(
+                &fonts.bold,
+                38.0 * l.scale,
+                center,
+                l.title_baseline,
+                APP_NAME,
+                t.foreground,
+                4.0 * l.scale,
+            );
+            painter.centered_text(
+                &fonts.regular,
+                14.0 * l.scale,
+                center,
+                l.tagline_baseline,
+                TAGLINE,
+                t.muted,
+            );
+        }
 
         let x = l.left as i32;
         let cw = l.column_w as u32;
@@ -864,7 +902,19 @@ fn draw_power_icon(
     }
 }
 
+/// The `ascii` banner on the form monitor: sizes and the gap to its line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BannerSpot {
+    size: f32,
+    tag_size: f32,
+    gap: i32,
+}
+
 struct Layout {
+    /// The `ascii` style's banner (drawn by [`Ascii`]), or `None` for the
+    /// classic title.
+    banner: Option<BannerSpot>,
+    banner_top: f32,
     scale: f32,
     left: f32,
     column_w: f32,
@@ -920,6 +970,164 @@ fn blit(dst: &mut [u32], dst_w: u32, at: &Rect, src: &[u32]) {
         let s = row * at.w as usize;
         dst[d..d + at.w as usize].copy_from_slice(&src[s..s + at.w as usize]);
     }
+}
+
+/// Lay the `ascii` banners out on every monitor of a freshly built scene:
+/// the form monitor's above the form (drawn with the form on every redraw),
+/// the others centred and painted into the cached frame now.
+fn lay_out_ascii(ascii: &mut Ascii, scene: &mut Scene, ui: &Ui) {
+    ascii.clear();
+    let m = ascii.metrics;
+    let form = scene.screen.form;
+    let bg = ui.theme.background.pixel();
+    let (sw, sh) = (scene.screen.width, scene.screen.height);
+    for monitor in scene.screen.monitors.clone() {
+        if monitor == form {
+            let l = ui.layout(form.w, form.h);
+            let Some(b) = l.banner else {
+                continue;
+            };
+            let spot = Spot::centred(
+                &m,
+                form.x + form.w as i32 / 2,
+                form.y + l.banner_top.round() as i32,
+                b.size,
+                b.tag_size,
+                b.gap,
+            );
+            let backdrop = scene.form_backdrop.as_deref();
+            ascii.add(monitor, spot, |x, y| {
+                let i = (y - form.y) as usize * form.w as usize + (x - form.x) as usize;
+                backdrop.and_then(|p| p.get(i).copied()).unwrap_or(bg)
+            });
+        } else {
+            let scale = scale_for(monitor.h);
+            let size = ascii::banner_size(monitor.w, monitor.h, 0.6, 0.32, m.advance, m.line);
+            let tag_size = 15.0 * scale;
+            let gap = (18.0 * scale).round() as i32;
+            let block = Spot::centred(&m, 0, 0, size, tag_size, gap).height(&m);
+            let top = monitor.y + monitor.h as i32 * 46 / 100 - block / 2;
+            let centre = monitor.x + monitor.w as i32 / 2;
+            let spot = Spot::centred(&m, centre, top, size, tag_size, gap);
+            let frame = &scene.frame;
+            ascii.add(monitor, spot, |x, y| {
+                frame
+                    .get(y as usize * sw as usize + x as usize)
+                    .copied()
+                    .unwrap_or(bg)
+            });
+            let index = ascii.banners.len() - 1;
+            ascii.paint(
+                index,
+                &mut Canvas {
+                    pixels: &mut scene.frame,
+                    x: 0,
+                    y: 0,
+                    width: sw,
+                    height: sh,
+                },
+            );
+        }
+    }
+    scene.full = true;
+}
+
+fn build_scene(
+    screen: Screen,
+    ui: &Ui,
+    wallpaper: Option<&Image>,
+    ascii: Option<&mut Ascii>,
+) -> Scene {
+    let mut scene = Scene::build(screen, &ui.theme, wallpaper);
+    if let Some(ascii) = ascii {
+        lay_out_ascii(ascii, &mut scene, ui);
+    }
+    scene
+}
+
+/// Advance the `ascii` banners and present only what changed. The form
+/// monitor's banner is left alone while the power dialog is open (it may
+/// overlap); the next full redraw brings it up to date.
+fn tick_ascii(
+    ascii: &mut Ascii,
+    scene: &mut Scene,
+    painter: &mut Painter,
+    surface: &mut softbuffer::Surface<Rc<winit::window::Window>, Rc<winit::window::Window>>,
+    window: &winit::window::Window,
+    dialog_open: bool,
+) {
+    let form = scene.screen.form;
+    let (sw, sh) = (scene.screen.width, scene.screen.height);
+    let form_ready = (painter.width(), painter.height()) == (form.w, form.h);
+    let mut damage: Vec<(Rect, bool)> = Vec::new();
+    for index in 0..ascii.banners.len() {
+        let on_form = ascii.banners[index].area == form;
+        let changed = if on_form {
+            if dialog_open || !form_ready {
+                continue;
+            }
+            ascii.tick(
+                index,
+                &mut Canvas {
+                    pixels: painter.pixels_mut(),
+                    x: form.x,
+                    y: form.y,
+                    width: form.w,
+                    height: form.h,
+                },
+            )
+        } else {
+            ascii.tick(
+                index,
+                &mut Canvas {
+                    pixels: &mut scene.frame,
+                    x: 0,
+                    y: 0,
+                    width: sw,
+                    height: sh,
+                },
+            )
+        };
+        if let Some(rect) = changed.filter(|r| r.w > 0 && r.h > 0) {
+            damage.push((rect, on_form));
+        }
+    }
+    if damage.is_empty() {
+        return;
+    }
+    let Ok(mut buffer) = surface.buffer_mut() else {
+        return;
+    };
+    if scene.full || buffer.age() == 0 || buffer.len() != scene.frame.len() {
+        // Nothing trustworthy on screen yet: the next full redraw has it all.
+        window.request_redraw();
+        return;
+    }
+    let mut rects = Vec::with_capacity(damage.len());
+    for (r, on_form) in damage {
+        let (x0, w) = (r.x.max(0) as usize, r.w as usize);
+        for y in r.y.max(0)..(r.y + r.h as i32).min(sh as i32) {
+            let d = y as usize * sw as usize + x0;
+            let src = if on_form {
+                let s = (y - form.y) as usize * form.w as usize + (x0 - form.x as usize);
+                painter.pixels().get(s..s + w)
+            } else {
+                scene.frame.get(d..d + w)
+            };
+            if let (Some(src), Some(dst)) = (src, buffer.get_mut(d..d + w)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        if let (Some(width), Some(height)) = (NonZeroU32::new(r.w), NonZeroU32::new(r.h)) {
+            rects.push(softbuffer::Rect {
+                x: r.x.max(0) as u32,
+                y: r.y.max(0) as u32,
+                width,
+                height,
+            });
+        }
+    }
+    let _ = buffer.present_with_damage(&rects);
 }
 
 fn window_id(window: &winit::window::Window) -> Option<u32> {
@@ -1040,32 +1248,47 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut scene = Scene::build(
-        current_screen(x11.as_ref(), window.inner_size()),
-        &theme,
-        wallpaper.as_ref(),
-    );
-    let mut painter = Painter::new(scene.screen.form.w, scene.screen.form.h);
+    let mut ascii = (theme.style == Style::Ascii).then(|| {
+        Ascii::new(
+            fonts.mono.clone(),
+            ascii::Colours {
+                accent: ascii::banner_colour(theme.accent, theme.foreground, theme.background),
+                foreground: theme.foreground,
+                muted: theme.muted,
+            },
+        )
+    });
     let username = users::prefill_username();
     let mut ui = Ui::new(theme, layouts, layout, username);
+    ui.ascii = ascii.as_ref().map(|a| a.metrics);
+    let mut scene = build_scene(
+        current_screen(x11.as_ref(), window.inner_size()),
+        &ui,
+        wallpaper.as_ref(),
+        ascii.as_mut(),
+    );
+    let mut painter = Painter::new(scene.screen.form.w, scene.screen.form.h);
     ui.caps_lock = x11.as_ref().map(|x| x.caps_lock()).unwrap_or(false);
     let mut next_tick = Instant::now() + Duration::from_millis(500);
+    let mut ascii_due = ascii.as_ref().map(|a| a.deadline());
+    let wake = |tick: Instant, due: Option<Instant>| due.map_or(tick, |d| d.min(tick));
     let mut exit_after_draw = false;
     let mut reply_tx: Option<Sender<Zeroizing<String>>> = None;
 
     let _ = event_loop.run(move |event, elwt| {
         let _ = &context;
-        elwt.set_control_flow(ControlFlow::WaitUntil(next_tick));
+        elwt.set_control_flow(ControlFlow::WaitUntil(wake(next_tick, ascii_due)));
         let form = scene.screen.form;
         let local = |pos: (f64, f64)| (pos.0 - f64::from(form.x), pos.1 - f64::from(form.y));
         match event {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => elwt.exit(),
                 WindowEvent::Resized(_) => {
-                    scene = Scene::build(
+                    scene = build_scene(
                         current_screen(x11.as_ref(), window.inner_size()),
-                        &ui.theme,
+                        &ui,
                         wallpaper.as_ref(),
+                        ascii.as_mut(),
                     );
                     window.request_redraw();
                 }
@@ -1221,10 +1444,11 @@ fn main() {
                     let size = window.inner_size();
                     let (width, height) = (size.width.max(1), size.height.max(1));
                     if (width, height) != (scene.screen.width, scene.screen.height) {
-                        scene = Scene::build(
+                        scene = build_scene(
                             current_screen(x11.as_ref(), size),
-                            &ui.theme,
+                            &ui,
                             wallpaper.as_ref(),
+                            ascii.as_mut(),
                         );
                     }
                     let form = scene.screen.form;
@@ -1241,6 +1465,22 @@ fn main() {
                         return;
                     }
                     ui.draw(&mut painter, &fonts, scene.form_backdrop.as_deref());
+                    if let Some(a) = ascii.as_mut() {
+                        for index in 0..a.banners.len() {
+                            if a.banners[index].area == form {
+                                a.paint(
+                                    index,
+                                    &mut Canvas {
+                                        pixels: painter.pixels_mut(),
+                                        x: form.x,
+                                        y: form.y,
+                                        width: form.w,
+                                        height: form.h,
+                                    },
+                                );
+                            }
+                        }
+                    }
                     if let Ok(mut buffer) = surface.buffer_mut() {
                         if buffer.len() == scene.frame.len() {
                             if scene.full || buffer.age() == 0 {
@@ -1335,10 +1575,11 @@ fn main() {
                                 .request_inner_size(PhysicalSize::new(screen.width, screen.height));
                             window.set_outer_position(PhysicalPosition::new(0, 0));
                         }
-                        scene = Scene::build(
+                        scene = build_scene(
                             current_screen(x11.as_ref(), window.inner_size()),
-                            &ui.theme,
+                            &ui,
                             wallpaper.as_ref(),
+                            ascii.as_mut(),
                         );
                     }
                 }
@@ -1359,6 +1600,20 @@ fn main() {
                         window.request_redraw();
                     }
                 }
+                if let (Some(a), Some(due)) = (ascii.as_mut(), ascii_due) {
+                    if now >= due {
+                        tick_ascii(
+                            a,
+                            &mut scene,
+                            &mut painter,
+                            &mut surface,
+                            &window,
+                            ui.pending_power.is_some(),
+                        );
+                        ascii_due = Some(a.deadline());
+                    }
+                }
+                elwt.set_control_flow(ControlFlow::WaitUntil(wake(next_tick, ascii_due)));
             }
             _ => {}
         }
@@ -1588,6 +1843,136 @@ mod tests {
         u.failure_text(AuthOutcome::Cancelled);
         assert_eq!(u.notice, "Sign-in cancelled");
         assert_eq!(u.failed_attempts, 2);
+    }
+
+    fn ascii_metrics() -> ascii::Metrics {
+        ascii::Metrics {
+            advance: 0.6,
+            line: 1.17,
+            ascent: 0.93,
+        }
+    }
+
+    #[test]
+    fn the_ascii_banner_sits_above_the_clock_and_the_form() {
+        for (w, h) in [
+            (1280, 800),
+            (1366, 768),
+            (1920, 1080),
+            (2560, 1440),
+            (1080, 1920),
+        ] {
+            let mut u = ui(&["se"], "alice");
+            u.ascii = Some(ascii_metrics());
+            let l = u.layout(w, h);
+            let b = l.banner.expect("ascii layout");
+            let m = ascii_metrics();
+            let spot = Spot::centred(
+                &m,
+                w as i32 / 2,
+                l.banner_top as i32,
+                b.size,
+                b.tag_size,
+                b.gap,
+            );
+            let bottom = (l.banner_top as i32 + spot.height(&m)) as f32;
+            // The clock's cap height is under 44 px * scale.
+            assert!(bottom < l.clock_baseline - 44.0 * l.scale, "{w}x{h}");
+            assert!(l.banner_top >= 36.0, "{w}x{h}");
+            assert!(spot.left >= 0 && spot.left + 44 * m.cell(b.size).adv <= w as i32);
+            assert!(
+                l.button_y + l.button_h < h as f32 - 54.0 * l.scale,
+                "{w}x{h}"
+            );
+        }
+        // The classic look keeps its title and no banner.
+        let classic = ui(&["se"], "alice").layout(1920, 1080);
+        assert!(classic.banner.is_none());
+        assert!(classic.title_baseline > classic.date_baseline);
+        assert!(classic.user_label > classic.tagline_baseline);
+    }
+
+    /// Two monitors with a wallpaper: the banner on both, the form on one.
+    /// With `NIRULOGIN_TEST_SHOT=/path.png` the composed screen is written
+    /// out for a look.
+    #[test]
+    fn ascii_banners_cover_every_monitor() {
+        let Ok(fonts) = Fonts::load() else {
+            return;
+        };
+        let left = Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let right = Rect {
+            x: 1920,
+            y: 0,
+            w: 1280,
+            h: 1024,
+        };
+        let screen = display::plan_screen(3200, 1080, &[(left, false), (right, true)], None);
+        let theme = Theme::parse("accent = \"#88c0d0\"\nbackground = \"#2e3440\"");
+        let accent = ascii::banner_colour(theme.accent, theme.foreground, theme.background);
+        assert_eq!(accent, theme.accent);
+        let mut a = Ascii::new(
+            fonts.mono.clone(),
+            ascii::Colours {
+                accent,
+                foreground: theme.foreground,
+                muted: theme.muted,
+            },
+        );
+        a.skip_typing();
+        let wallpaper = Image {
+            width: 2,
+            height: 2,
+            pixels: vec![0x405070, 0x705040, 0x507040, 0x404040],
+        };
+        let mut u = Ui::new(theme, vec!["se".into()], "se".into(), "alice".into());
+        u.ascii = Some(a.metrics);
+        let scene = build_scene(screen, &u, Some(&wallpaper), Some(&mut a));
+        assert_eq!(a.banners.len(), 2);
+        let form = scene.screen.form;
+        assert_eq!(form, right);
+        let mut painter = Painter::new(form.w, form.h);
+        u.draw(&mut painter, &fonts, scene.form_backdrop.as_deref());
+        let index = a.banners.iter().position(|b| b.area == form).unwrap();
+        a.paint(
+            index,
+            &mut Canvas {
+                pixels: painter.pixels_mut(),
+                x: form.x,
+                y: form.y,
+                width: form.w,
+                height: form.h,
+            },
+        );
+        let mut frame = scene.frame.clone();
+        blit(&mut frame, scene.screen.width, &form, painter.pixels());
+        let lit = |m: &Rect| {
+            frame
+                .chunks(scene.screen.width as usize)
+                .skip(m.y as usize)
+                .take(m.h as usize)
+                .flat_map(|row| &row[m.x as usize..(m.x + m.w as i32) as usize])
+                .filter(|&&p| p == accent.pixel())
+                .count()
+        };
+        assert!(lit(&left) > 1000, "banner on the other monitor");
+        assert!(lit(&right) > 1000, "banner on the form monitor");
+        if let Some(path) = std::env::var_os("NIRULOGIN_TEST_SHOT") {
+            let file = std::fs::File::create(path).unwrap();
+            let mut enc = png::Encoder::new(file, scene.screen.width, scene.screen.height);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let rgb: Vec<u8> = frame
+                .iter()
+                .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])
+                .collect();
+            enc.write_header().unwrap().write_image_data(&rgb).unwrap();
+        }
     }
 
     #[test]

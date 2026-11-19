@@ -11,6 +11,9 @@ pub struct Painter {
 pub struct Fonts {
     pub regular: FontArc,
     pub bold: FontArc,
+    /// Monospace, for the `ascii` style's banner (the regular font when no
+    /// monospace font is installed).
+    pub mono: FontArc,
 }
 
 impl Fonts {
@@ -26,7 +29,18 @@ impl Fonts {
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         ])
         .unwrap_or_else(|_| regular.clone());
-        Ok(Self { regular, bold })
+        let mono = load_first(&[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+        ])
+        .unwrap_or_else(|_| regular.clone());
+        Ok(Self {
+            regular,
+            bold,
+            mono,
+        })
     }
 }
 
@@ -60,6 +74,10 @@ impl Painter {
 
     pub fn pixels(&self) -> &[u32] {
         &self.pixels
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        &mut self.pixels
     }
 
     pub fn width(&self) -> u32 {

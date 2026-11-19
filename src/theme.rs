@@ -15,7 +15,12 @@
 //! error      = "#d77a7a"
 //! wallpaper  = "/usr/share/nirulogin/wallpaper.png"  # PNG, greeter-readable
 //! dim        = "0.55"                                 # 0 = black, 1 = unchanged
+//! style      = "ascii"                                # or "classic"
 //! ```
+//!
+//! `style` picks the look: `ascii` (the default) types the NIRUX ascii
+//! banner above the form, like the screensaver and lock screen; `classic` is
+//! the plain title of NIRULOGIN 0.2. `NIRULOGIN_STYLE` overrides the file.
 
 use std::path::{Path, PathBuf};
 
@@ -60,6 +65,26 @@ impl Color {
     }
 }
 
+/// The login screen's look.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Style {
+    /// The NIRUX ascii banner, typed out above the form.
+    #[default]
+    Ascii,
+    /// The plain "NIRUX" title and tagline.
+    Classic,
+}
+
+impl Style {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "ascii" => Some(Self::Ascii),
+            "classic" => Some(Self::Classic),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub background: Color,
@@ -71,6 +96,7 @@ pub struct Theme {
     pub error: Color,
     pub wallpaper: Option<PathBuf>,
     pub dim: f32,
+    pub style: Style,
 }
 
 impl Default for Theme {
@@ -85,6 +111,7 @@ impl Default for Theme {
             error: Color::new(0xd7, 0x7a, 0x7a),
             wallpaper: None,
             dim: 0.45,
+            style: Style::Ascii,
         }
     }
 }
@@ -95,9 +122,16 @@ impl Theme {
         let path = std::env::var_os("NIRULOGIN_THEME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(THEME_FILE));
-        std::fs::read_to_string(path)
+        let mut theme: Self = std::fs::read_to_string(path)
             .map(|text| Self::parse(&text))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(style) = std::env::var("NIRULOGIN_STYLE")
+            .ok()
+            .and_then(|v| Style::parse(&v))
+        {
+            theme.style = style;
+        }
+        theme
     }
 
     pub fn parse(text: &str) -> Self {
@@ -130,6 +164,12 @@ impl Theme {
                 "wallpaper" => {
                     if value.starts_with('/') {
                         theme.wallpaper = Some(PathBuf::from(value));
+                    }
+                    continue;
+                }
+                "style" => {
+                    if let Some(style) = Style::parse(value) {
+                        theme.style = style;
                     }
                     continue;
                 }
@@ -270,6 +310,14 @@ mod tests {
         );
         assert!((theme.dim - 0.6).abs() < 1e-6);
         assert_eq!(Theme::parse("wallpaper = \"relative.png\"").wallpaper, None);
+    }
+
+    #[test]
+    fn style_defaults_to_ascii_and_classic_brings_the_old_look_back() {
+        assert_eq!(Theme::default().style, Style::Ascii);
+        assert_eq!(Theme::parse("style = \"classic\"").style, Style::Classic);
+        assert_eq!(Theme::parse("style = Classic # old").style, Style::Classic);
+        assert_eq!(Theme::parse("style = \"crt\"").style, Style::Ascii);
     }
 
     #[test]
