@@ -12,10 +12,16 @@ NIRUWM. greetd owns PAM, authentication and the session; NIRU Login owns the
 window, clock, prompt and error messages.
 
 It is the default login screen of a new NIRUX installation. It deliberately has
-no session picker, user avatars, animations, network access or autologin.
+no session picker, user avatars, network access or autologin.
 
 ## Features
 
+- The **NIRUX ascii** look by default, the same as the NIRUX screensaver and
+  lock screen: the NIRUX banner is typed out in `#` characters above the
+  clock and the form, with "A MINIMAL X11 DESKTOP" under it and a blinking
+  block cursor. The form works from the first frame; the animation never
+  touches input. `style = "classic"` brings back the plain title (see
+  [Theme](#theme)).
 - Username prefill: `NIRULOGIN_USER` if set, otherwise the last user who signed
   in successfully, otherwise the only human account (uid ≥ 1000 with a valid
   login shell), otherwise an empty, focused field.
@@ -149,6 +155,8 @@ Environment variables in the greetd command line:
   `~/.local/bin/niruwm-session`.
 - `NIRULOGIN_THEME=/path/to/theme.toml` selects another theme file (previews,
   tests).
+- `NIRULOGIN_STYLE=ascii` or `NIRULOGIN_STYLE=classic` overrides the theme
+  file's `style`.
 
 ### Theme
 
@@ -167,9 +175,35 @@ accent     = "#5a5a60"
 error      = "#d77a7a"
 wallpaper  = "/usr/share/nirulogin/wallpaper.png"   # optional, PNG only
 dim        = 0.45                                   # optional, 0 black .. 1 unchanged
+style      = "ascii"                                # optional, "ascii" (default) or "classic"
 ```
 
 NIRUX writes this file from the active theme during `nirux update`.
+
+#### Style
+
+`style = "ascii"` (the default, also when the file is missing) shows the NIRUX
+ascii banner like the NIRUX screensaver and lock screen:
+
+- The banner is typed one `#` at a time (spaces are skipped), then after a short
+  breath "A MINIMAL X11 DESKTOP" is typed under it. The whole typing takes about
+  seven seconds, and a block cursor then blinks after the line.
+- The character just typed glows in the `foreground` colour and settles into
+  `accent`. When `accent` has a contrast below 4.5:1 against `background` (as
+  the built-in grey accent does), the banner uses `foreground` instead.
+- On a large banner (rows at least 24 px tall) a dark scanline runs through
+  every third pixel row of the `#` characters only. There is no full-screen
+  CRT or scanline overlay.
+- Every monitor shows the banner, sized for that monitor and centred. On the
+  form monitor it sits above the clock and the form. With a wallpaper the
+  banner is drawn over the darkened wallpaper (`dim`).
+- Only what changes is redrawn: one character while typing and the cursor's
+  cell when it blinks.
+
+`style = "classic"` restores the look of NIRULOGIN 0.2: the clock, a "NIRUX"
+title and the tagline above the form, with no animation. The banner uses a
+monospace font (DejaVu Sans Mono or Liberation Mono) and falls back to the
+regular font when none is installed.
 
 ### Power actions and polkit
 
